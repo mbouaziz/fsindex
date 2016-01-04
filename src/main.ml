@@ -1,251 +1,15 @@
 
 (* todo: locate *)
 
-module H = struct
-  include Digest
+open GenSpec
+open More
 
-  let combine list =
-    let list = List.sort Pervasives.compare list in
-    string (String.concat "" (List.rev_map to_hex list))
-
-  let empty = string ""
-
-end
-
-module Int64Map = Map.Make(Int64)
-module HMap = Map.Make(H)
-module StringMap = Map.Make(String)
-module StringSet = Set.Make(String)
-
-module StringUnsortedPair = struct
-  type t = string * string
-  let compare = Pervasives.compare
-  let make s1 s2 =
-    if s1 < s2 then s1, s2 else s2, s1
-end
-module SUP = StringUnsortedPair
-module SUPMap = Map.Make(SUP)
-
-let (@>) f g = fun x -> g (f x)
-let fst3 (a, _, _) = a
-
-let listRevSplit l =
-  let rec aux ((rx, ry) as acc) = function
-  | [] -> acc
-  | (x, y)::l -> aux (x::rx, y::ry) l
-  in
-  aux ([], []) l
-
-let rec listKeep n l = match l with (* /!\ not tailrec *)
-| [] -> l
-| _ when n <= 0 -> []
-| hd::tl -> hd::(listKeep (n-1) tl)
-
-let listKeepLast n l =
-  if n <= 0 then [] else
-    let rec aux all l = match l with
-    | [] -> List.nth all (n-1)
-    | _::tl -> aux (l::all) tl
-    in
-    try aux [] l with _ -> l
-
-let rec listLast = function
-| [] -> raise Not_found
-| [x] -> x
-| _::l -> listLast l
-
-let stringStartsWith pref s =
-  String.length s >= String.length pref &&
-    String.sub s 0 (String.length pref) = pref
-
-let stringChopPrefix s pref =
-  String.sub s (String.length pref) (String.length s - String.length pref)
-
-let stringIndexListFrom s i cList =
-  let l = String.length s in
-  let r = List.fold_left (fun r c -> min r (try String.index_from s i c with Not_found -> l)) l cList in
-  if r = l then raise Not_found
-  else r
-
-let stringSplitKeepLastEmpty s cList =
-  let l = String.length s in
-  if l = 0 then []
-  else
-    let rec aux i =
-      if i >= l then [""]
-      else match stringIndexListFrom s i cList with
-      | j when j = i -> aux (j+1)
-      | j -> (String.sub s i (j-i))::(aux (j+1))
-      | exception Not_found -> [String.sub s i (l-i)]
-    in
-    aux 0
-
-let commaSeparatedString s =
-  let l = String.length s in
-  if l <= 3 then s
-  else
-    let l' = l + (l-1)/3 in
-    let g k =
-      let k' = l' - k - 1 in
-      if k' mod 4 = 3 then ','
-      else s.[l - k' + k'/4 - 1]
-    in
-    String.init l' g
-
-let commaSeparatedInt64 i = commaSeparatedString (Int64.to_string i)
-let commaSeparatedInt i = commaSeparatedString (string_of_int i)
 
 let formatSize = commaSeparatedInt64
 let formatInt = commaSeparatedInt
 
 let formatPercent f =
   Printf.sprintf "%2.2f" (f *. 100.)
-
-module Path = struct
-
-  type t = { l: string list;
-             s: string }
-  
-  let empty = { l = [];
-                s = "/" } (* Unix only!!! *)
-
-  let concat path name = { l = name::path.l;
-                           s = Filename.concat path.s name }
-
-  let toString path = path.s
-
-  let baseName path = match path.l with
-  | [] -> ""
-  | hd::_ -> hd
-
-  let filenameDirOpt filename =
-    let d = Filename.dirname filename in
-    if d = filename then None
-    else Some d
-
-  let rec filenameLength filename =
-    match filenameDirOpt filename with
-    | None -> 1
-    | Some d -> 1 + (filenameLength d)
-
-  let dirSepLength = String.length Filename.dir_sep
-
-  let filenameIsParent f1 f2 =
-    let l1 = String.length f1 in
-    let l2 = String.length f2 in
-    l1 + dirSepLength < l2 && String.sub f2 l1 dirSepLength = Filename.dir_sep && String.sub f2 0 l1 = f1
-
-  let ofString path =
-    let rec lOfString path =
-      let b = Filename.basename path in
-      match filenameDirOpt path with
-      | None -> []
-      | Some d -> b::(lOfString d)
-    in
-    { l = lOfString path;
-      s = path }
-
-  let currentDirPrefix = Filename.concat Filename.current_dir_name ""
-  let parentDirPrefix = Filename.concat Filename.parent_dir_name ""
-
-  let rec smartConcat cwd filename =
-    if not (Filename.is_relative filename) then filename
-    else if filename = Filename.current_dir_name then cwd
-    else if filename = Filename.parent_dir_name then Filename.dirname cwd
-    else if Filename.is_implicit filename then Filename.concat cwd filename
-    else if stringStartsWith currentDirPrefix filename then smartConcat cwd (stringChopPrefix filename currentDirPrefix)
-    else if stringStartsWith parentDirPrefix filename then smartConcat (Filename.dirname cwd) (stringChopPrefix filename parentDirPrefix)
-    else begin
-      Printf.printf "Don't know how to smartConcat '%S' with '%S'\n" cwd filename;
-      filename
-    end
-
-  let cwd = Unix.getcwd ()
-
-  let makeAbsolute filename =
-    smartConcat cwd filename
-
-end
-
-module type NodeAndLeaf = sig
-
-  type node
-  type leaf
-  val emptyNode: node
-  val nodeOfLeaf: leaf -> node
-  val replace: (* from *) node -> (* to *) node -> (* in *) node -> node
-
-end
-
-module MakePathTree(NAL : NodeAndLeaf) = struct
-
-  type t =
-  | Node of (NAL.node * t StringMap.t)
-  | Leaf of NAL.leaf
-
-  let nodeEmpty = NAL.emptyNode, StringMap.empty
-  let empty = Node nodeEmpty
-
-  let nodeOfTree = function
-  | Leaf l -> NAL.nodeOfLeaf l
-  | Node (n, _) -> n
-
-  let nodeReplace pathElt ot t n m =
-    NAL.replace (nodeOfTree ot) (nodeOfTree t) n, StringMap.add pathElt t m
-
-  let getSubElt (tree, mk) pathElt =
-    let n, m = match tree with
-    | Leaf _ -> nodeEmpty
-    | Node nm -> nm
-    in
-    let subTree = try StringMap.find pathElt m with Not_found -> empty in
-    subTree, fun t -> mk (Node (nodeReplace pathElt subTree t n m))
-
-  let subElt tree pathElt = getSubElt (tree, fun x -> x) pathElt
-
-  let subPath tree path =
-    let rpath = List.rev path.Path.l in
-    List.fold_left getSubElt (tree, fun x -> x) rpath
-
-  let nodeOfSubPath tree path =
-    let subTree, _ = subPath tree path in
-    nodeOfTree subTree
-
-  let getLeaf tree = match tree with
-  | Leaf x -> x
-  | Node _ -> raise Not_found (* TODO: make diff between empty/non-empty dir *)
-
-  let getLeaves tree =
-    let rec aux _ tree acc = match tree with
-    | Leaf x -> x::acc
-    | Node (_, m) -> StringMap.fold aux m acc
-    in
-    aux "" tree []
-
-  let getNodes tree =
-    let rec auxOfTree path tree acc =
-      match tree with
-      | Leaf x -> (path, NAL.nodeOfLeaf x)::acc
-      | Node (n, m) -> StringMap.fold (aux path) m ((path, n)::acc)
-    and aux path name tree acc =
-      let path = Path.concat path name in
-      auxOfTree path tree acc
-    in
-    auxOfTree Path.empty tree []
-
-  let switch onLeaf onNode tree = match tree with
-  | Leaf x -> onLeaf x
-  | Node (n, t) -> onNode n t
-
-  let switchFold onLeaf onNodeElt tree acc = match tree with
-  | Leaf x -> onLeaf x acc
-  | Node (_, m) -> StringMap.fold onNodeElt m acc
-
-  let leaf x = Leaf x
-
-  let node n m = Node (n, m)
-
-end
 
 module FsNode = struct
 
@@ -261,7 +25,7 @@ module FsNode = struct
       size = Int64.add (Int64.sub inNode.size fromNode.size) toNode.size }
 end
 
-module PathTree = MakePathTree(FsNode)
+module FsTree = PathTree.Make(FsNode)
 
 module DirHashNode = struct
 
@@ -282,26 +46,19 @@ module DirHashNode = struct
 
 end
 
-module DHTree = MakePathTree(DirHashNode)
+module DHTree = PathTree.Make(DirHashNode)
 
 type 'tree genIndex = {
   hashes: StringSet.t HMap.t Int64Map.t;
   tree: 'tree;
 }
 
-module DHIndex = struct
-
-  let empty = { hashes = Int64Map.empty;
-                tree = DHTree.empty }
-
-end
-
-type index = PathTree.t genIndex
+type index = FsTree.t genIndex
 
 module Index = struct
 
   let empty = { hashes = Int64Map.empty;
-                tree = PathTree.empty }
+                tree = FsTree.empty }
 
   let fromFile filename =
     let ic = open_in_bin filename in
@@ -322,11 +79,11 @@ module Index = struct
     let mk index = { index with tree = mk index.tree } in
     { index with tree = subTree }, mk
 
-  let subPath = mkSub PathTree.subPath
-  let subElt = mkSub PathTree.subElt
+  let subPath = mkSub FsTree.subPath
+  let subElt = mkSub FsTree.subElt
 
   let switchFold onLeaf onNodeElt index =
-    PathTree.switchFold onLeaf onNodeElt index.tree index
+    FsTree.switchFold onLeaf onNodeElt index.tree index
 
 end
 
@@ -340,7 +97,7 @@ module Exclusion = struct
     let replace _from _to _in = assert false
   end
 
-  module ExclTree = MakePathTree(ExclNode)
+  module ExclTree = PathTree.Make(ExclNode)
 
   let add f tree =
     let f = Path.makeAbsolute f in
@@ -425,7 +182,7 @@ let rec rmAllFiles index path =
   let onLeaf (sz, _, h) index = rmFileFromHashes index sz h (Path.toString path) in
   let onNodeElt name tree index = rmAllFiles { index with tree = tree } (Path.concat path name) in
   let index = Index.switchFold onLeaf onNodeElt index in
-  { index with tree = PathTree.empty }
+  { index with tree = FsTree.empty }
 
 let rmRemovedFiles path files index =
   let onLeaf _ index = index in
@@ -441,7 +198,7 @@ let addRegFileToIndex index path stats =
   let size = stats.Unix.LargeFile.st_size in
   let filename = Path.toString path in
   Printf.printf "File %s (%s) " filename (formatSize size);
-  let toAdd, toRm = match PathTree.getLeaf index.tree with
+  let toAdd, toRm = match FsTree.getLeaf index.tree with
   | sz, _, h when sz <> size ->
     Printf.printf "changed (size was %s)\n" (formatSize sz);
     true, Some (sz, h)
@@ -463,7 +220,7 @@ let addRegFileToIndex index path stats =
     match H.file filename with
     | h ->
       let index = addFileToHashes index size h filename in
-      { index with tree = PathTree.leaf (size, Unix.gettimeofday (), h) }
+      { index with tree = FsTree.leaf (size, Unix.gettimeofday (), h) }
     | exception _ ->
       Printf.printf "Failed to hash file %s\n" filename;
       index
@@ -527,9 +284,9 @@ let printSummaryDiff node0 node1 =
     Printf.printf "%s byte(s) added\n" (formatSize (Int64.sub node1.FsNode.size node0.FsNode.size))
 
 let addToSavedIndex dirl excl index =
-  let node0 = PathTree.nodeOfTree index.tree in
+  let node0 = FsTree.nodeOfTree index.tree in
   let index = List.fold_left (addOneToIndex excl) index (List.map Path.makeAbsolute dirl) in
-  let node1 = PathTree.nodeOfTree index.tree in
+  let node1 = FsTree.nodeOfTree index.tree in
   printSummaryDiff node0 node1;
   index
 
@@ -540,9 +297,9 @@ let rmOneFromIndex index filename =
   mk index
 
 let rmFromSavedIndex dirl index =
-  let node0 = PathTree.nodeOfTree index.tree in
+  let node0 = FsTree.nodeOfTree index.tree in
   let index = List.fold_left rmOneFromIndex index (List.map Path.makeAbsolute dirl) in
-  let node1 = PathTree.nodeOfTree index.tree in
+  let node1 = FsTree.nodeOfTree index.tree in
   printSummaryDiff node0 node1;
   index
 
@@ -609,7 +366,7 @@ let dirHashIndex index =
       let index = { hashes = hashes; tree = DHTree.node node m } in
       addFileToHashes index size hash (Path.toString path)
     in
-    PathTree.switch onLeaf onNode tree
+    FsTree.switch onLeaf onNode tree
   in
   aux Path.empty Int64Map.empty index.tree
 
@@ -729,13 +486,13 @@ let printStats () index =
       count + card, Int64.add sizeLost (Int64.mul sz (Int64.of_int (card - 1)))
   ) index.hashes (0, 0L) in
   Printf.printf "Hashes: %s\n\n" (formatInt count);
-  let node = PathTree.nodeOfTree index.tree in
+  let node = FsTree.nodeOfTree index.tree in
   Printf.printf "Files: %s\n" (formatInt node.FsNode.nbFiles);
   Printf.printf "Total size: %s\n" (formatSize node.FsNode.size);
   Printf.printf "Total size lost: %s\n" (formatSize sizeLost)
 
 let collectAllFiles tree =
-  let nodes = PathTree.getNodes tree in
+  let nodes = FsTree.getNodes tree in
   let nodeV (_, n) = n.FsNode.size in
   let cmpNode n1 n2 = Pervasives.compare (nodeV n1) (nodeV n2) in
   List.sort cmpNode nodes
@@ -743,8 +500,8 @@ let collectAllFiles tree =
 let diskUsage maxToShow filename index =
   let filename = Path.makeAbsolute filename in
   let path = Path.ofString filename in
-  let tree, _ = PathTree.subPath index.tree path in
-  let root = PathTree.nodeOfTree tree in
+  let tree, _ = FsTree.subPath index.tree path in
+  let root = FsTree.nodeOfTree tree in
   if root.FsNode.size <= 0L then
     Printf.printf "Empty!\n"
   else
@@ -760,8 +517,8 @@ let diskUsage maxToShow filename index =
 
 let diskUsageTree maxToShow filename index =
   let path = Path.ofString filename in
-  let tree, _ = PathTree.subPath index.tree path in
-  let root = PathTree.nodeOfTree tree in
+  let tree, _ = FsTree.subPath index.tree path in
+  let root = FsTree.nodeOfTree tree in
   if root.FsNode.size <= 0L then
     Printf.printf "Empty!\n"
   else
@@ -781,11 +538,11 @@ let diskUsageTree maxToShow filename index =
         let onNode node m =
           printFile margin path node false;
           let l = StringMap.bindings m in
-          let nodeV (_, tree) = (PathTree.nodeOfTree tree).FsNode.size in
+          let nodeV (_, tree) = (FsTree.nodeOfTree tree).FsNode.size in
           let cmpNode n1 n2 = Pervasives.compare (nodeV n1) (nodeV n2) in
           let l = List.sort cmpNode l in
           List.iter (walk (margin ^ "  ") path) l in
-        PathTree.switch onFile onNode tree
+        FsTree.switch onFile onNode tree
       end
     and walk margin parent (name, tree) =
       walkPath margin (Path.concat parent name) tree
@@ -804,7 +561,7 @@ let checkIndex () index =
       if isFileInHashes index sz h (Path.toString path) then index
       else begin
         Printf.printf "%s (hash missing)\n" (Path.toString path);
-        { index with tree = PathTree.empty }
+        { index with tree = FsTree.empty }
       end
     in
     let onNodeElt name t index =
@@ -816,16 +573,16 @@ let checkIndex () index =
   let checkHashes index =
     let forFile size h filename index =
       let path = Path.ofString filename in
-      let tree, mk = PathTree.subPath index.tree path in
-      match PathTree.getLeaf tree with
+      let tree, mk = FsTree.subPath index.tree path in
+      match FsTree.getLeaf tree with
       | (sz, _, _) when size <> sz ->
         Printf.printf "%s (size mismatch)\n" filename;
         let index = rmFileFromHashes index size h filename in
-        { index with tree = mk PathTree.empty }
+        { index with tree = mk FsTree.empty }
       | (_, _, h') when h <> h' ->
         Printf.printf "%s (hash mismatch)\n" filename;
         let index = rmFileFromHashes index size h filename in
-        { index with tree = mk PathTree.empty }
+        { index with tree = mk FsTree.empty }
       | _ -> index
       | exception Not_found ->
         Printf.printf "%s (missing tree leaf)\n" filename; (* todo: diff empty/non-empty dir *)
@@ -857,65 +614,6 @@ let withIndexAndExclFilesRW f indexFile =
 let maxToShow = 10000
 let maxToShowSmall = 200
 let myName = "fsindex"
-
-
-type ('z, 'o, 'l, 'b) genGenSpec =
-  | Zero of 'z
-  | One of 'o * 'b
-  | List of 'l * 'b
-
-module BashComplete = struct
-
-  type t = File | Dir | Nothing | FunAll of (string list -> unit)
-
-  let completeCommand cmd arg =
-    cmd |> List.map fst3 |> List.filter (stringStartsWith arg) |> List.iter print_endline
-  let completeFile arg = Sys.command (Printf.sprintf "bash -c \"compgen -f -- '%s'\"" arg) |> ignore
-  let completeDir arg = Sys.command (Printf.sprintf "bash -c \"compgen -d -- '%s'\"" arg) |> ignore
-
-  let completeT t args arg =
-    match t with
-    | File -> completeFile arg
-    | Dir -> completeDir arg
-    | Nothing -> ()
-    | FunAll f -> f args
-
-  let completeSpec spec args =
-    match spec with
-    | Zero _ -> ()
-    | One (_, t) ->
-      let first a = completeT t args a in
-      begin match args with
-      | [] -> first ""
-      | [a] -> first a
-      | _ -> () end
-    | List (_, t) ->
-      completeT t args (try listLast args with Not_found -> "")
-
-  let genCommand cmd more default args =
-    let first a = completeCommand cmd a; more a in
-    match args with
-    | [] -> first ""
-    | [a] -> first a
-    | a0::args ->
-      match List.find (fst3 @> ((=) a0)) cmd with
-      | (_, spec, _) -> completeSpec spec args
-      | exception Not_found -> default args
-
-  let command cmd args = genCommand cmd ignore ignore args
-
-  let commandOrFile cmd following args = genCommand cmd completeFile following args
-
-end
-
-module type ArgSpec = sig
-
-  type 'arg t
-  type acc
-
-  val doCommand: 'arg -> 'arg t -> acc -> unit
-
-end
 
 type ('z, 'o, 'l) genSpec = ('z, 'o, 'l, BashComplete.t) genGenSpec
 
