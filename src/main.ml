@@ -1,5 +1,4 @@
 
-open GenSpec
 open More
 
 
@@ -616,166 +615,83 @@ let maxToShow = 10000
 let maxToShowSmall = 200
 let myName = "fsindex"
 
-module type MadeArg = sig
-  module ArgSpec : ArgSpec
-  type spec = (unit ArgSpec.t, string ArgSpec.t, string list ArgSpec.t) BashComplete.spec
-end
-
-module MakeArg(AS : ArgSpec) : (MadeArg with module ArgSpec = AS) = struct
-  module ArgSpec = AS
-  type spec = (unit AS.t, string AS.t, string list AS.t) BashComplete.spec
-end
-
-module type ArgCommand = sig
-  module A : MadeArg
-
-  val commands : (string * A.spec * string) list
-
-  val default : A.ArgSpec.acc -> string -> string list -> unit
-    
-end
-
-module MakeCommands(AC : ArgCommand) = struct
-  module AS = AC.A.ArgSpec
-
-  let doCommand acc command spec args =
-    let checkExactArgs n =
-      let a = List.length args in
-      if a <> n then
-        raise (Arg.Bad (Printf.sprintf "Command %s expect %d arguments, %d given" command n a))
-    in
-    match spec with
-    | Zero t -> checkExactArgs 0; AS.doCommand () t acc
-    | One (t, _) -> checkExactArgs 1; AS.doCommand (List.hd args) t acc
-    | List (t, _) -> AS.doCommand args t acc
-
-  let parse acc args = match args with
-  | [] -> raise (Arg.Bad "Missing command")
-  | command::args ->
-    match List.find (fst3 @> ((=) command)) AC.commands with
-    | _, indexSpec, _ -> doCommand acc command indexSpec args
-    | exception Not_found -> AC.default acc command args
-
-  let usage () =
-    let padFor =
-      let maxLength = List.fold_left (fun m (k, _, _) -> max m (String.length k)) 0 AC.commands in
-      fun s -> String.make (maxLength + 3 - String.length s) ' '
-    in
-    let commandUsage (k, _, doc) = Printf.printf " %s%s%s\n" k (padFor k) doc in
-    List.iter commandUsage AC.commands
-
-end
+let makeUsage commands =
+  let padFor =
+    let maxLength = List.fold_left (fun m (k, _, _) -> max m (String.length k)) 0 commands in
+    fun s -> String.make (maxLength + 3 - String.length s) ' '
+  in
+  let commandUsage (k, _, doc) = Printf.printf " %s%s%s\n" k (padFor k) doc in
+  List.iter commandUsage commands
 
 module DoRmCmd = struct
-  module ArgSpec = struct
-    type 'arg t = unit
-    type acc = unit
-    let doCommand _arg _t () = failwith "Not implemented"
-  end
-  module A = MakeArg(ArgSpec)
-
-  let commands = [
-  ]
-
-  let default () = failwith "Not implemented"
-
-  let bashComplete = BashComplete.(Or (Commands commands, Dir))
-end
-module DoRmCommands = MakeCommands(DoRmCmd)
-
-module IndexCmd = struct
-  module ArgSpec = struct
-    type 'arg t =
-    | RWExcl of ('arg -> Exclusion.ExclTree.t -> index -> index)
-    | RW of ('arg -> index -> index)
-    | RO of ('arg -> index -> unit)
-
-    type acc = string
-
-    let doCommand arg t =
-      match t with
-      | RWExcl f -> withIndexAndExclFilesRW (f arg)
-      | RW f -> withIndexFileRW (f arg)
-      | RO f -> withIndexFileRO (f arg)
-  end
-
-  module A = MakeArg(ArgSpec)
   open ArgSpec
 
   let commands = [
-    "add", List (RWExcl addToSavedIndex, BashComplete.File), "add/update files/directories to index";
-    "rm", List (RW rmFromSavedIndex, BashComplete.File), "remove files/directories from index";
-    "ldup", Zero (RO (printDup noFilter printSizeLost)), "list duplicate files";
-    "ddup", Zero (RO printDDup), "list duplicate directories";
-    "lsim", Zero (RO (listSim maxToShow)), "list similar directories";
-    "stats", Zero (RO printStats), "print stats";
-    "du", One (RO (diskUsage maxToShow), BashComplete.Dir), "print biggest files/directories in some directory";
-    "dut", One (RO (diskUsageTree maxToShowSmall), BashComplete.Dir), "print biggest files/directories in some directory (shown as a tree)";
-    "phashes", Zero (RO printHashes), "print all files in index";
-    "pdhashes", Zero (RO printDirHashes), "print all directories in index";
-    "check", Zero (RW checkIndex), "check index and remove partial entries";
-    "dorm", List (RO doRm, DoRmCmd.bashComplete), "remove duplicates";
   ]
 
-  let default command args =
-    raise (Arg.Bad ("Unknown command " ^ command))
-
-  let bashComplete = BashComplete.Commands commands
+  let args = Or (Commands commands, Dir)
 end
-module IndexCommands = MakeCommands(IndexCmd)
+
+module IndexCmd = struct
+  open ArgSpec
+
+  let rwexcl f arg = withIndexAndExclFilesRW (f arg)
+  let rw f arg = withIndexFileRW (f arg)
+  let ro f arg = withIndexFileRO (f arg)
+
+  let commands = [
+    "add", Apply (rwexcl addToSavedIndex, List File), "add/update files/directories to index";
+    "rm", Apply (rw rmFromSavedIndex, List File), "remove files/directories from index";
+    "ldup", Apply (ro (printDup noFilter printSizeLost), Nothing), "list duplicate files";
+    "ddup", Apply (ro printDDup, Nothing), "list duplicate directories";
+    "lsim", Apply (ro (listSim maxToShow), Nothing), "list similar directories";
+    "stats", Apply (ro printStats, Nothing), "print stats";
+    "du", Apply (ro (diskUsage maxToShow), Dir), "print biggest files/directories in some directory";
+    "dut", Apply (ro (diskUsageTree maxToShowSmall), Dir), "print biggest files/directories in some directory (shown as a tree)";
+    "phashes", Apply (ro printHashes, Nothing), "print all files in index";
+    "pdhashes", Apply (ro printDirHashes, Nothing), "print all directories in index";
+    "check", Apply (rw checkIndex, Nothing), "check index and remove partial entries";
+    "dorm", Apply (ro doRm, DoRmCmd.args), "remove duplicates";
+  ]
+
+  let args = Commands commands
+end
 
 module MainCmd = struct
-  module ArgSpec = struct
-    type 'arg t = 'arg -> unit
-    type acc = unit
-    let doCommand arg t () = t arg
-  end
-  module A = MakeArg(ArgSpec)
-  
-  let help () = raise (Arg.Help "Help requested")
+  open ArgSpec  
 
-  let saveArgv args =
-    let oc = open_out "argv" in 
-    List.iter (fun a -> output_string oc (a ^ "\n")) args;
-    close_out oc
+  let help () = raise (Arg.Help "Help requested")
 
   let bashCompletion () =
     Printf.printf "# Bash completion script for %s\n" myName;
     Printf.printf "# Put this script in /etc/bash_completion.d/\n\n";
     Printf.printf "complete -C %s %s\n" myName myName
 
-  let rec bashComplete =
-    BashComplete.(Or (Commands commands, Then (File, IndexCmd.bashComplete)))
-
-  and bashCompleteMain args =
-    if false then saveArgv args;
-    match args with
-    | [] -> ()
-    | _::args -> BashComplete.doComplete bashComplete args
-
-  and commands = [
-    "--help", Zero help, "print this help";
-    (* "--bashcomplete", List (bashCompleteMain, BashComplete.FunAll bashCompleteMain), "help completion script"; *)
-    "--bashcompletion", Zero bashCompletion, "print completion script";
+  let commands = [
+    "--help", Apply (help, Nothing), "print this help";
+    "--bashcompletion", Apply (bashCompletion, Nothing), "print completion script";
   ]
 
-  let default () = IndexCommands.parse
+  let default =
+    let apply (index, f) = f index in
+    Apply (apply, Then (File, IndexCmd.args))
+
+  let args = Or (Commands commands, default)
 end
-module MainCommands = MakeCommands(MainCmd)
 
 let main () =
   let usage () =
     Printf.printf "Usage (1): %s <command> [<command args>]\n\n" myName;
     Printf.printf "where <command> can be:\n";
-    MainCommands.usage ();
+    makeUsage MainCmd.commands;
     Printf.printf "\n";
     Printf.printf "Usage (2): %s <index file> <command> [<command args>]\n\n" myName;
     Printf.printf "where <command> can be:\n";
-    IndexCommands.usage ();
+    makeUsage IndexCmd.commands;
     Printf.printf "\n";
     Printf.printf "Usage (3): %s <index file> dorm <commands>\n\n" myName;
     Printf.printf "where commands can be:\n";
-    DoRmCommands.usage ();
+    makeUsage DoRmCmd.commands;
     Printf.printf "\n"
   in
   let help msg =
@@ -783,7 +699,7 @@ let main () =
     usage ()
   in
   try
-    MainCommands.parse () (List.tl (Array.to_list Sys.argv))
+    Args.compute MainCmd.args (List.tl (Array.to_list Sys.argv))
   with
   | Arg.Help msg -> help msg
   | Arg.Bad msg -> help ("Error: " ^ msg)
@@ -793,7 +709,9 @@ let complete line =
   let point = try int_of_string (Sys.getenv "COMP_POINT") with Not_found -> String.length line in
   let line = if point < String.length line then String.sub line 0 point else line in
   let args = stringSplitKeepLastEmpty line wordBreaks in
-  MainCmd.bashCompleteMain args
+  match args with
+  | [] -> ()
+  | _::args -> Args.doComplete MainCmd.args args
 
 let mainOrComplete () =
   match Sys.getenv "COMP_LINE" with

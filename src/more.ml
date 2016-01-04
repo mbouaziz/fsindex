@@ -1,6 +1,7 @@
 
 let (@>) f g = fun x -> g (f x)
 let fst3 (a, _, _) = a
+let snd3 (_, b, _) = b
 
 let listRevSplit l =
   let rec aux ((rx, ry) as acc) = function
