@@ -593,6 +593,9 @@ let checkIndex () index =
   let index = checkTree Path.empty index in
   checkHashes index
 
+let doRm _ index =
+  failwith "Not implemented"
+
 let withIndexFileRO f indexFile =
   let index = Index.fromFileOrEmpty indexFile in
   f index
@@ -663,6 +666,23 @@ module MakeCommands(AC : ArgCommand) = struct
 
 end
 
+module DoRmCmd = struct
+  module ArgSpec = struct
+    type 'arg t = unit
+    type acc = unit
+    let doCommand _arg _t () = failwith "Not implemented"
+  end
+  module A = MakeArg(ArgSpec)
+
+  let commands = [
+  ]
+
+  let default () = failwith "Not implemented"
+
+  let bashComplete = BashComplete.(Or (Commands commands, Dir))
+end
+module DoRmCommands = MakeCommands(DoRmCmd)
+
 module IndexCmd = struct
   module ArgSpec = struct
     type 'arg t =
@@ -694,6 +714,7 @@ module IndexCmd = struct
     "phashes", Zero (RO printHashes), "print all files in index";
     "pdhashes", Zero (RO printDirHashes), "print all directories in index";
     "check", Zero (RW checkIndex), "check index and remove partial entries";
+    "dorm", List (RO doRm, DoRmCmd.bashComplete), "remove duplicates";
   ]
 
   let default command args =
@@ -751,6 +772,10 @@ let main () =
     Printf.printf "Usage (2): %s <index file> <command> [<command args>]\n\n" myName;
     Printf.printf "where <command> can be:\n";
     IndexCommands.usage ();
+    Printf.printf "\n";
+    Printf.printf "Usage (3): %s <index file> dorm <commands>\n\n" myName;
+    Printf.printf "where commands can be:\n";
+    DoRmCommands.usage ();
     Printf.printf "\n"
   in
   let help msg =
