@@ -21,7 +21,7 @@ If you want bash completion, run `fsindex --bashcompletion` and follow the instr
 
 Run `fsindex --help`.
 
-Additonally, you can prevent files/directories from being added to the index by creating a file having the same name as your index file plus `.excl`. E.g. if your index is `~/myindex`, create a file `~/myindex.excl` containing
+Additionally, you can prevent files/directories from being added to the index by creating a file having the same name as your index file plus `.excl`. E.g. if your index is `~/myindex`, create a file `~/myindex.excl` containing
 
 ```
 /dev
