@@ -1,6 +1,4 @@
 
-(* todo: locate *)
-
 open GenSpec
 open More
 
