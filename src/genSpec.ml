@@ -1,5 +1,5 @@
 
-type ('z, 'o, 'l, 'b) genGenSpec =
+type ('z, 'o, 'l, 'b) genSpec =
   | Zero of 'z
   | One of 'o * 'b
   | List of 'l * 'b

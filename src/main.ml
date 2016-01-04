@@ -613,16 +613,14 @@ let maxToShow = 10000
 let maxToShowSmall = 200
 let myName = "fsindex"
 
-type ('z, 'o, 'l) genSpec = ('z, 'o, 'l, BashComplete.t) genGenSpec
-
 module type MadeArg = sig
   module ArgSpec : ArgSpec
-  type spec = (unit ArgSpec.t, string ArgSpec.t, string list ArgSpec.t) genSpec
+  type spec = (unit ArgSpec.t, string ArgSpec.t, string list ArgSpec.t) BashComplete.spec
 end
 
 module MakeArg(AS : ArgSpec) : (MadeArg with module ArgSpec = AS) = struct
   module ArgSpec = AS
-  type spec = (unit AS.t, string AS.t, string list AS.t) genSpec
+  type spec = (unit AS.t, string AS.t, string list AS.t) BashComplete.spec
 end
 
 module type ArgCommand = sig
@@ -701,7 +699,7 @@ module IndexCmd = struct
   let default command args =
     raise (Arg.Bad ("Unknown command " ^ command))
 
-  let bashComplete args = BashComplete.command commands args
+  let bashComplete = BashComplete.Commands commands
 end
 module IndexCommands = MakeCommands(IndexCmd)
 
@@ -725,14 +723,14 @@ module MainCmd = struct
     Printf.printf "# Put this script in /etc/bash_completion.d/\n\n";
     Printf.printf "complete -C %s %s\n" myName myName
 
-  let rec bashComplete args =
-    BashComplete.commandOrFile commands IndexCmd.bashComplete args
+  let rec bashComplete =
+    BashComplete.(Or (Commands commands, Then (File, IndexCmd.bashComplete)))
 
   and bashCompleteMain args =
-    saveArgv args;
+    if false then saveArgv args;
     match args with
     | [] -> ()
-    | _::args -> bashComplete args
+    | _::args -> BashComplete.doComplete bashComplete args
 
   and commands = [
     "--help", Zero help, "print this help";
