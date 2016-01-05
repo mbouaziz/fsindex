@@ -11,6 +11,17 @@ let completeCommand cmd arg =
 let completeFile arg = Sys.command (Printf.sprintf "bash -c \"compgen -f -- '%s'\"" arg) |> ignore
 let completeDir arg = Sys.command (Printf.sprintf "bash -c \"compgen -d -- '%s'\"" arg) |> ignore
 
+let rec canBeEmpty : type a. a t -> bool = function
+  | Apply (_, t) -> canBeEmpty t
+  | Commands _ -> false
+  | Dir -> false
+  | File -> false
+  | List _ -> true
+  | Nothing -> true
+  | Or (t1, t2) -> canBeEmpty t1 || canBeEmpty t2
+  | Then (t1, t2) -> canBeEmpty t1 && canBeEmpty t2
+  | Value _ -> true
+
 let rec completeT : type a. a t -> string -> unit = fun t arg ->
   match t with
   | Apply (_, t') -> completeT t' arg
@@ -20,7 +31,9 @@ let rec completeT : type a. a t -> string -> unit = fun t arg ->
   | List t' -> completeT t' arg
   | Nothing -> ()
   | Or (t1, t2) -> completeT t1 arg; completeT t2 arg
-  | Then (t1, t2) -> completeT t1 arg
+  | Then (t1, t2) ->
+    completeT t1 arg;
+    if canBeEmpty t1 then completeT t2 arg
   | Value _ -> ()
 
 let rec matchFirst : type a. a t -> string -> wrapped = fun t0 a ->
