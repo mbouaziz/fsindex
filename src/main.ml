@@ -629,7 +629,7 @@ module DoRmCmd = struct
   let commands = [
   ]
 
-  let args = Or (Commands commands, Dir)
+  let args = List (Commands commands)
 end
 
 module IndexCmd = struct

@@ -21,6 +21,7 @@ let rec completeT : type a. a t -> string -> unit = fun t arg ->
   | Nothing -> ()
   | Or (t1, t2) -> completeT t1 arg; completeT t2 arg
   | Then (t1, t2) -> completeT t1 arg
+  | Value _ -> ()
 
 let rec matchFirst : type a. a t -> string -> wrapped = fun t0 a ->
   match t0 with
@@ -40,9 +41,10 @@ let rec matchFirst : type a. a t -> string -> wrapped = fun t0 a ->
     | Wrapped Nothing -> matchFirst t2 a
     | Wrapped t1 -> Wrapped t1)
   | Then (t1, t2) ->
-    match matchFirst t1 a with
+    (match matchFirst t1 a with
     | Wrapped Nothing -> Wrapped t2
-    | Wrapped t1 -> Wrapped (Then (t1, t2))
+    | Wrapped t1 -> Wrapped (Then (t1, t2)))
+  | Value _ -> raise Not_found
 
 let rec doComplete : type a. a t -> string list -> unit = fun t args ->
   match args with
@@ -91,6 +93,9 @@ let compute : type a. a t -> string list -> a = fun t args ->
       let res1, rem1 = aux t1 false args in
       let res2, rem = aux t2 full rem1 in
       lazy (Lazy.force res1, Lazy.force res2), rem
+    | Value v, args ->
+      if full && args <> [] then raise (Arg.Bad "Too many arguments");
+      lazy v, args
   in
   match aux t true args with
   | v, [] -> Lazy.force v

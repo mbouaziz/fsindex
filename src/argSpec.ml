@@ -8,3 +8,4 @@ type _ argSpec =
   | Nothing : unit argSpec
   | Or : 'a argSpec * 'a argSpec -> 'a argSpec
   | Then : 'a argSpec * 'b argSpec -> ('a * 'b) argSpec
+  | Value : 'a -> 'a argSpec
