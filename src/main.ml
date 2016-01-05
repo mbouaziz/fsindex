@@ -592,6 +592,16 @@ let checkIndex () index =
   let index = checkTree Path.empty index in
   checkHashes index
 
+type doRmConfig = {
+  verbosity : int;
+  force : bool;
+}
+
+let doRmDefaultConfig = {
+  verbosity = 0;
+  force = false;
+}
+
 let doRm _ index =
   failwith "Not implemented"
 
@@ -615,21 +625,26 @@ let maxToShow = 10000
 let maxToShowSmall = 200
 let myName = "fsindex"
 
-let makeUsage commands =
-  let padFor =
-    let maxLength = List.fold_left (fun m (k, _, _) -> max m (String.length k)) 0 commands in
-    fun s -> String.make (maxLength + 3 - String.length s) ' '
-  in
-  let commandUsage (k, _, doc) = Printf.printf " %s%s%s\n" k (padFor k) doc in
-  List.iter commandUsage commands
 
 module DoRmCmd = struct
   open ArgSpec
 
-  let commands = [
+  let incrVerb cfg = { cfg with verbosity = cfg.verbosity + 1 }
+  let decrVerb cfg = { cfg with verbosity = cfg.verbosity - 1 }
+  let setForce cfg = { cfg with force = true }
+
+  let commands0 = [
+    "--verbose", Value incrVerb, "increase verbosity";
+    "--quiet", Value decrVerb, "decrease verbosity";
+    "--force", Value setForce, "really remove files";
+  ]
+  let commands1 = [
+    "--collect", Then (Value (true, false), List Dir), "collect hashes in these directories";
+    "--collectrm", Then (Value (true, true), List Dir), "collect hashes and remove files in these directories";
+    "--rm", Then (Value (false, true), List Dir), "remove files in these directories";
   ]
 
-  let args = List (Commands commands)
+  let args = Then (List (Commands commands0), List (Commands commands1))
 end
 
 module IndexCmd = struct
@@ -683,15 +698,17 @@ let main () =
   let usage () =
     Printf.printf "Usage (1): %s <command> [<command args>]\n\n" myName;
     Printf.printf "where <command> can be:\n";
-    makeUsage MainCmd.commands;
+    Args.usage MainCmd.commands;
     Printf.printf "\n";
     Printf.printf "Usage (2): %s <index file> <command> [<command args>]\n\n" myName;
     Printf.printf "where <command> can be:\n";
-    makeUsage IndexCmd.commands;
+    Args.usage IndexCmd.commands;
     Printf.printf "\n";
-    Printf.printf "Usage (3): %s <index file> dorm <commands>\n\n" myName;
-    Printf.printf "where commands can be:\n";
-    makeUsage DoRmCmd.commands;
+    Printf.printf "Usage (3): %s <index file> dorm [<option>+] [<command> <dirs>]+\n\n" myName;
+    Printf.printf "where <option> can be:\n";
+    Args.usage DoRmCmd.commands0;
+    Printf.printf "\nand <command> can be:\n";
+    Args.usage DoRmCmd.commands1;
     Printf.printf "\n"
   in
   let help msg =

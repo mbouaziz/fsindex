@@ -100,3 +100,11 @@ let compute : type a. a t -> string list -> a = fun t args ->
   match aux t true args with
   | v, [] -> Lazy.force v
   | _, rem -> raise (Arg.Bad "Too many arguments") (* should not happen *)
+
+let usage commands =
+  let padFor =
+    let maxLength = List.fold_left (fun m (k, _, _) -> max m (String.length k)) 0 commands in
+    fun s -> String.make (maxLength + 3 - String.length s) ' '
+  in
+  let commandUsage (k, _, doc) = Printf.printf " %s%s%s\n" k (padFor k) doc in
+  List.iter commandUsage commands
