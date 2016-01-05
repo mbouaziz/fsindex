@@ -639,12 +639,12 @@ module DoRmCmd = struct
     "--force", Value setForce, "really remove files";
   ]
   let commands1 = [
-    "--collect", Then (Value (true, false), List Dir), "collect hashes in these directories";
-    "--collectrm", Then (Value (true, true), List Dir), "collect hashes and remove files in these directories";
-    "--rm", Then (Value (false, true), List Dir), "remove files in these directories";
+    "--collect", Then (Value (true, false), NonEmptyList Dir), "collect hashes in these directories";
+    "--collectrm", Then (Value (true, true), NonEmptyList Dir), "collect hashes and remove files in these directories";
+    "--rm", Then (Value (false, true), NonEmptyList Dir), "remove files in these directories";
   ]
 
-  let args = Then (List (Commands commands0), List (Commands commands1))
+  let args = Then (List (Commands commands0), NonEmptyList (Commands commands1))
 end
 
 module IndexCmd = struct
@@ -655,8 +655,8 @@ module IndexCmd = struct
   let ro f arg = withIndexFileRO (f arg)
 
   let commands = [
-    "add", Apply (rwexcl addToSavedIndex, List File), "add/update files/directories to index";
-    "rm", Apply (rw rmFromSavedIndex, List File), "remove files/directories from index";
+    "add", Apply (rwexcl addToSavedIndex, NonEmptyList File), "add/update files/directories to index";
+    "rm", Apply (rw rmFromSavedIndex, NonEmptyList File), "remove files/directories from index";
     "ldup", Apply (ro (printDup noFilter printSizeLost), Nothing), "list duplicate files";
     "ddup", Apply (ro printDDup, Nothing), "list duplicate directories";
     "lsim", Apply (ro (listSim maxToShow), Nothing), "list similar directories";
@@ -736,6 +736,7 @@ let mainOrComplete () =
   | exception Not_found -> main ()
 
 let _ =
+  Args.sanityCheck MainCmd.args;
   Printexc.record_backtrace true;
   try mainOrComplete () with
   | exn ->
