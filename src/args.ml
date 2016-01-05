@@ -44,7 +44,7 @@ let rec matchFirst : type a. a t -> string -> wrapped = fun t0 a ->
     | Wrapped Nothing -> Wrapped t2
     | Wrapped t1 -> Wrapped (Then (t1, t2))
 
-let rec doComplete : type a. a t -> string list -> unit= fun t args ->
+let rec doComplete : type a. a t -> string list -> unit = fun t args ->
   match args with
   | [] -> completeT t ""
   | [a] -> completeT t a
@@ -54,36 +54,44 @@ let rec doComplete : type a. a t -> string list -> unit= fun t args ->
     | Wrapped t' -> doComplete t' args
 
 let compute : type a. a t -> string list -> a = fun t args ->
-  let rec aux : type a. a t -> string list -> a Lazy.t * string list = fun t args ->
+  let rec aux : type a. a t -> bool -> string list -> a Lazy.t * string list = fun t full args ->
     match t, args with
     | Apply (f, t'), _ ->
-      let res, rem = aux t' args in
+      let res, rem = aux t' full args in
       lazy (f (Lazy.force res)), rem
     | Commands _, [] -> raise (Arg.Bad "Missing command")
     | Commands cmd, command::args ->
       (match List.find (fst3 @> ((=) command)) cmd with
-      | _, t, _ -> aux t args
+      | _, t, _ -> aux t full args
       | exception Not_found -> raise (Arg.Bad "Unknown command"))
     | Dir, [] -> raise (Arg.Bad "Missing directory name")
     | File, [] -> raise (Arg.Bad "Missing file name")
-    | Dir, arg::args -> lazy arg, args
-    | File, arg::args -> lazy arg, args
+    | Dir, arg::args ->
+      if full && args <> [] then raise (Arg.Bad "Too many arguments");
+      lazy arg, args
+    | File, arg::args ->
+      if full && args <> [] then raise (Arg.Bad "Too many arguments");
+      lazy arg, args
     | List _, [] -> lazy [], []
     | List t', args ->
-      (match aux t' args with
+      let res, rem = match aux t' false args with
       | exception (Arg.Bad _) -> lazy [], args
       | res, rem ->
-        let res', rem = aux t rem in
-        lazy ((Lazy.force res)::(Lazy.force res')), rem)
-    | Nothing, args -> lazy (), args
+        let res', rem = aux t full rem in
+        lazy ((Lazy.force res)::(Lazy.force res')), rem in
+      if full && rem <> [] then raise (Arg.Bad "Too many arguments");
+      res, rem
+    | Nothing, args ->
+      if full && args <> [] then raise (Arg.Bad "Too many arguments");
+      lazy (), args
     | Or (t1, t2), args ->
-      (try aux t1 args with
-      | Arg.Bad _ -> aux t2 args)
+      (try aux t1 full args with
+      | Arg.Bad _ -> aux t2 full args)
     | Then (t1, t2), args ->
-      let res1, rem1 = aux t1 args in
-      let res2, rem = aux t2 rem1 in
+      let res1, rem1 = aux t1 false args in
+      let res2, rem = aux t2 full rem1 in
       lazy (Lazy.force res1, Lazy.force res2), rem
   in
-  match aux t args with
+  match aux t true args with
   | v, [] -> Lazy.force v
-  | _, rem -> raise (Arg.Bad "Too many arguments")
+  | _, rem -> raise (Arg.Bad "Too many arguments") (* should not happen *)
