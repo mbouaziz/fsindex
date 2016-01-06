@@ -39,7 +39,7 @@ let rec sanityCheck : type a. a t -> unit = function
   | Apply (_, t) -> sanityCheck t
   | Commands cmd ->
     (match List.find (fst3 @> ((=) "")) cmd with
-    | exception Not_found -> ()
+    | exception Not_found -> () (* could check they are all different *)
     | _ -> failwith "Empty command");
     List.iter (snd3 @> sanityCheck) cmd
   | Dir -> ()
@@ -52,6 +52,7 @@ let rec sanityCheck : type a. a t -> unit = function
     sanityCheck t
   | Nothing -> ()
   | Or (t1, t2) ->
+    if canBeEmpty t1 then failwith "First element of Or can be empty";
     sanityCheck t1;
     sanityCheck t2
   | Then (t1, t2) ->
