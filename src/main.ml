@@ -620,26 +620,34 @@ let doRemoveFile cfg filename =
 
 let rec doCollectRmAllFiles cfg (index, subHashes) ~collect ~rm path =
   let onLeaf (sz, _, h) (index, subHashes) =
+    let filename = lazy (Path.toString path) in
     match getInHashes subHashes sz h with
     | otherNames ->
       assert (not (StringSet.is_empty otherNames));
       if cfg.verbosity >= 0 then begin
         let otherName = StringSet.choose otherNames in
-        Printf.printf "%s = %s\n" (Path.toString path) otherName
+        let nbOthers = StringSet.cardinal otherNames in
+        let andNbOthers =
+          if nbOthers > 1 then
+            Printf.sprintf " (and %d others)" (nbOthers - 1)
+          else "" in
+        Printf.printf "%s = %s%s\n" (Lazy.force filename) otherName andNbOthers
       end;
       if rm then
-        let filename = Path.toString path in
-        let didRemove = doRemoveFile cfg filename in
+        let didRemove = doRemoveFile cfg (Lazy.force filename) in
         if didRemove then
-          let index = rmFileFromHashes index sz h filename in
+          let index = rmFileFromHashes index sz h (Lazy.force filename) in
           index, subHashes
         else
           index, subHashes
+      else if collect then
+        let subHashes = addFileInHashes subHashes sz h (Lazy.force filename) in
+        index, subHashes
       else
         index, subHashes
     | exception Not_found ->
       if collect then
-        let subHashes = addFileInHashes subHashes sz h (Path.toString path) in
+        let subHashes = addFileInHashes subHashes sz h (Lazy.force filename) in
         index, subHashes
       else
         index, subHashes in
