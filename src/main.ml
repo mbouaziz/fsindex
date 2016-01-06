@@ -11,7 +11,7 @@ let formatPercent f =
 module FsNode = struct
 
   type node = { nbFiles: int; size: int64 }
-  type leaf = int64 * float * H.t
+  type leaf = (* size: *) int64 * (* modification time: *) float * (* hash: *) H.t
 
   let emptyNode = { nbFiles = 0; size = 0L }
 
@@ -154,17 +154,17 @@ let rmFileFromHashes index size h filename =
   in
   { index with hashes = hashes }
 
+let getInHashes hashes size h =
+  let hm = Int64Map.find size hashes in
+  HMap.find h hm
+
 let isFileInHashes index size h filename =
-  match Int64Map.find size index.hashes with
-  | hm ->
-    begin match HMap.find h hm with
-    | fs -> StringSet.mem filename fs
-    | exception Not_found -> false
-    end
+  match getInHashes index.hashes size h with
+  | fs -> StringSet.mem filename fs
   | exception Not_found -> false
 
-let addFileToHashes index size h filename =
-  let hm = match Int64Map.find size index.hashes with
+let addFileInHashes hashes size h filename =
+  let hm = match Int64Map.find size hashes with
   | hm ->
     let fs = match HMap.find h hm with
     | fs -> StringSet.add filename fs
@@ -173,11 +173,14 @@ let addFileToHashes index size h filename =
     HMap.add h fs hm
   | exception Not_found -> HMap.singleton h (StringSet.singleton filename)
   in
-  { index with hashes = Int64Map.add size hm index.hashes }
+  Int64Map.add size hm hashes
+
+let addFileToHashes index size h filename =
+  { index with hashes = addFileInHashes index.hashes size h filename }
 
 let rec rmAllFiles index path =
   let onLeaf (sz, _, h) index = rmFileFromHashes index sz h (Path.toString path) in
-  let onNodeElt name tree index = rmAllFiles { index with tree = tree } (Path.concat path name) in
+  let onNodeElt name tree index = rmAllFiles { index with tree } (Path.concat path name) in
   let index = Index.switchFold onLeaf onNodeElt index in
   { index with tree = FsTree.empty }
 
@@ -602,17 +605,76 @@ let doRmDefaultConfig = {
   force = false;
 }
 
-let doRm _ index =
-  failwith "Not implemented"
+let doRemoveFile cfg filename =
+  if cfg.force then
+    match Unix.unlink filename with
+    | exception _ ->
+      if cfg.verbosity >= 0 then Printf.printf "Could not remove file %s\n" filename;
+      true (* safer to consider it was removed *)
+    | () ->
+      if cfg.verbosity >= 0 then Printf.printf "Removed file %s\n" filename;
+      true
+  else (
+    if cfg.verbosity >= 0 then Printf.printf "Would remove file %s\n" filename;
+    false )
+
+let rec doCollectRmAllFiles cfg (index, subHashes) ~collect ~rm path =
+  let onLeaf (sz, _, h) (index, subHashes) =
+    match getInHashes subHashes sz h with
+    | otherNames ->
+      assert (not (StringSet.is_empty otherNames));
+      if cfg.verbosity >= 0 then begin
+        let otherName = StringSet.choose otherNames in
+        Printf.printf "%s = %s\n" (Path.toString path) otherName
+      end;
+      if rm then
+        let filename = Path.toString path in
+        let didRemove = doRemoveFile cfg filename in
+        if didRemove then
+          let index = rmFileFromHashes index sz h filename in
+          index, subHashes
+        else
+          index, subHashes
+      else
+        index, subHashes
+    | exception Not_found ->
+      if collect then
+        let subHashes = addFileInHashes subHashes sz h (Path.toString path) in
+        index, subHashes
+      else
+        index, subHashes in
+  let onNodeElt name tree (index, subHashes) =
+    doCollectRmAllFiles cfg ({ index with tree }, subHashes) ~collect ~rm (Path.concat path name) in
+  let index, subHashes = FsTree.switchFold onLeaf onNodeElt index.tree (index, subHashes) in
+  let index = if rm then { index with tree = FsTree.empty } else index in
+  index, subHashes
+
+let doCollectRmOne cfg (index0, subHashes) ~collect ~rm filename =
+  let path = Path.ofString filename in
+  let index, mk = Index.subPath index0 path in
+  let index', subHashes = doCollectRmAllFiles cfg (index, subHashes) ~collect ~rm path in
+  if cfg.force then
+    mk index, subHashes
+  else
+    index0, subHashes
+
+let doRm (cfg, dirl) index =
+  let doOne (index, subHashes) ((collect, rm), dir) =
+    doCollectRmOne cfg (index, subHashes) ~collect ~rm (Path.makeAbsolute dir) in
+  let index, _ = List.fold_left doOne (index, Int64Map.empty) dirl in
+  index
 
 let withIndexFileRO f indexFile =
   let index = Index.fromFileOrEmpty indexFile in
   f index
 
 let withIndexFileRW f indexFile =
-  let index = Index.fromFileOrEmpty indexFile in
-  let index = f index in
-  Index.toFile indexFile index
+  let index0 = Index.fromFileOrEmpty indexFile in
+  let index = f index0 in
+  if index == index0 then
+    Printf.printf "Index did not change\n"
+  else
+    Index.toFile indexFile index
 
 let withIndexAndExclFilesRW f indexFile =
   let index = Index.fromFileOrEmpty indexFile in
@@ -633,18 +695,21 @@ module DoRmCmd = struct
   let decrVerb cfg = { cfg with verbosity = cfg.verbosity - 1 }
   let setForce cfg = { cfg with force = true }
 
+  let foldCfg fl =
+    List.fold_left (fun cfg f -> f cfg) doRmDefaultConfig fl
+
   let commands0 = [
     "--verbose", Value incrVerb, "increase verbosity";
     "--quiet", Value decrVerb, "decrease verbosity";
     "--force", Value setForce, "really remove files";
   ]
   let commands1 = [
-    "--collect", Then (Value (true, false), NonEmptyList Dir), "collect hashes in these directories";
-    "--collectrm", Then (Value (true, true), NonEmptyList Dir), "collect hashes and remove files in these directories";
-    "--rm", Then (Value (false, true), NonEmptyList Dir), "remove files in these directories";
+    "--collect", NonEmptyList (Then (Value (true, false), Dir)), "collect hashes in these directories";
+    "--collectrm", NonEmptyList (Then (Value (true, true), Dir)), "collect hashes and remove files in these directories";
+    "--rm", NonEmptyList (Then (Value (false, true), Dir)), "remove files in these directories";
   ]
 
-  let args = Then (List (Commands commands0), NonEmptyList (Commands commands1))
+  let args = Then (Apply (foldCfg, List (Commands commands0)), Apply (List.flatten, NonEmptyList (Commands commands1)))
 end
 
 module IndexCmd = struct
@@ -666,7 +731,7 @@ module IndexCmd = struct
     "phashes", Apply (ro printHashes, Nothing), "print all files in index";
     "pdhashes", Apply (ro printDirHashes, Nothing), "print all directories in index";
     "check", Apply (rw checkIndex, Nothing), "check index and remove partial entries";
-    "dorm", Apply (ro doRm, DoRmCmd.args), "remove duplicates";
+    "dorm", Apply (rw doRm, DoRmCmd.args), "remove duplicates";
   ]
 
   let args = Commands commands

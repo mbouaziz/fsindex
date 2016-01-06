@@ -25,7 +25,11 @@ module Make(NAL : NodeAndLeaf) = struct
   | Node (n, _) -> n
 
   let nodeReplace pathElt ot t n m =
-    NAL.replace (nodeOfTree ot) (nodeOfTree t) n, StringMap.add pathElt t m
+    let ot' = nodeOfTree ot in
+    let t' = nodeOfTree t in
+    let n' = if ot' == t' then n
+        else NAL.replace (nodeOfTree ot) (nodeOfTree t) n in
+    n', StringMap.add pathElt t m
 
   let getSubElt (tree, mk) pathElt =
     let n, m = match tree with
