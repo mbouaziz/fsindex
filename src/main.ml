@@ -79,8 +79,8 @@ module Index = struct
   let subPath = mkSub FsTree.subPath
   let subElt = mkSub FsTree.subElt
 
-  let switchFold onLeaf onNodeElt index =
-    FsTree.switchFold onLeaf onNodeElt index.tree index
+  let switchFold onLeaf onNodeElt index acc =
+    FsTree.switchFold onLeaf onNodeElt index.tree acc
 
 end
 
@@ -139,6 +139,36 @@ module Exclusion = struct
 
 end
 
+type delta = {
+  filesAdded : int;
+  filesRemoved : int;
+  filesUpdated : int;
+  sizeAdded : Int64.t;
+  sizeRemoved : Int64.t;
+  sizeUpdated : Int64.t;
+}
+
+let emptyDelta = {
+  filesAdded = 0;
+  filesRemoved = 0;
+  filesUpdated = 0;
+  sizeAdded = 0L;
+  sizeRemoved = 0L;
+  sizeUpdated = 0L;
+}
+
+let deltaUpdateFile delta oldSize newSize =
+  { delta with filesUpdated = delta.filesUpdated + 1;
+    sizeUpdated = Int64.add delta.sizeUpdated (Int64.sub newSize oldSize) }
+
+let deltaAddFile delta size =
+  { delta with filesAdded = delta.filesAdded + 1;
+    sizeAdded = Int64.add delta.sizeAdded size }
+
+let deltaRemoveFile delta size =
+  { delta with filesRemoved = delta.filesRemoved + 1;
+    sizeRemoved = Int64.add delta.sizeRemoved size }
+
 let rmFileFromHashes index size h filename = 
   let hm = Int64Map.find size index.hashes in
   let fs = HMap.find h hm in
@@ -178,129 +208,122 @@ let addFileInHashes hashes size h filename =
 let addFileToHashes index size h filename =
   { index with hashes = addFileInHashes index.hashes size h filename }
 
-let rec rmAllFiles index path =
-  let onLeaf (sz, _, h) index = rmFileFromHashes index sz h (Path.toString path) in
-  let onNodeElt name tree index = rmAllFiles { index with tree } (Path.concat path name) in
-  let index = Index.switchFold onLeaf onNodeElt index in
-  { index with tree = FsTree.empty }
+let rec rmAllFiles (index, delta) path =
+  let onLeaf (sz, _, h) (index, delta) =
+    let index = rmFileFromHashes index sz h (Path.toString path) in
+    let delta = deltaRemoveFile delta sz in
+    index, delta in
+  let onNodeElt name tree (index, delta) =
+    rmAllFiles ({ index with tree }, delta) (Path.concat path name) in
+  let index, delta = Index.switchFold onLeaf onNodeElt index (index, delta) in
+  { index with tree = FsTree.empty }, delta
 
-let rmRemovedFiles path files index =
-  let onLeaf _ index = index in
-  let onNodeElt name t index =
-    if StringSet.mem name files then index
+let rmRemovedFiles path files (index, delta) =
+  let onLeaf _ (index, delta) = index, delta in
+  let onNodeElt name t (index, delta) =
+    if StringSet.mem name files then index, delta
     else
       let index, mk = Index.subElt index name in
-      mk (rmAllFiles index (Path.concat path name))
+      let index, delta = rmAllFiles (index, delta) (Path.concat path name) in
+      mk index, delta
   in
-  Index.switchFold onLeaf onNodeElt index
+  Index.switchFold onLeaf onNodeElt index (index, delta)
 
-let addRegFileToIndex index path stats =
+let addRegFileToIndex (index, delta) path stats =
   let size = stats.Unix.LargeFile.st_size in
   let filename = Path.toString path in
   Printf.printf "File %s (%s) " filename (formatSize size);
-  let toAdd, toRm = match FsTree.getLeaf index.tree with
+  let toAdd, toRm, delta = match FsTree.getLeaf index.tree with
   | sz, _, h when sz <> size ->
     Printf.printf "changed (size was %s)\n" (formatSize sz);
-    true, Some (sz, h)
+    true, Some (sz, h), deltaUpdateFile delta sz size
   | sz, tm, h when tm < stats.Unix.LargeFile.st_mtime ->
     Printf.printf "changed (time)\n";
-    true, Some (sz, h)
+    true, Some (sz, h), deltaUpdateFile delta sz size
   | _ ->
     Printf.printf "unchanged\n";
-    false, None
+    false, None, delta
   | exception Not_found ->
     Printf.printf "new\n";
-    true, None
-  in
+    true, None, deltaAddFile delta size in
   let index = match toRm with
   | Some (sz, h) -> rmFileFromHashes index sz h filename
-  | None -> index
-  in
-  if toAdd then
-    match H.file filename with
-    | h ->
-      let index = addFileToHashes index size h filename in
-      { index with tree = FsTree.leaf (size, Unix.gettimeofday (), h) }
-    | exception _ ->
-      Printf.printf "Failed to hash file %s\n" filename;
-      index
-  else
-    index
+  | None -> index in
+  let index = 
+    if toAdd then
+      match H.file filename with
+      | h ->
+        let index = addFileToHashes index size h filename in
+        { index with tree = FsTree.leaf (size, Unix.gettimeofday (), h) }
+      | exception _ ->
+        Printf.printf "Failed to hash file %s\n" filename;
+        index
+    else
+      index in
+  index, delta
 
-let rec addFileToIndex excl index path =
+let rec addFileToIndex excl (index, delta) path =
   if Exclusion.isExcluded excl then begin
     Printf.printf "Excluded file %s\n" (Path.toString path);
-    index
+    index, delta
   end else
     match Unix.LargeFile.lstat (Path.toString path) with
     | stats ->
-      let index = match stats.Unix.LargeFile.st_kind with
-      | Unix.S_REG -> addRegFileToIndex index path stats
-      | Unix.S_DIR -> addDirToIndex excl index path
+      begin match stats.Unix.LargeFile.st_kind with
+      | Unix.S_REG -> addRegFileToIndex (index, delta) path stats
+      | Unix.S_DIR -> addDirToIndex excl (index, delta) path
       | _ ->
         Printf.printf "Ignore file %s\n" (Path.toString path);
-        index
-      in
-      index
+        index, delta end
     | exception _ ->
       Printf.printf "Failed to lstat file %s\n" (Path.toString path);
-      index
+      index, delta
 
-and addDirToIndex excl index path =
+and addDirToIndex excl (index, delta) path =
   Printf.printf "In %s\n" (Path.toString path);
-  let rec aux dh files index =
+  let rec aux dh files (index, delta) =
     match Unix.readdir dh with
     | filename when filename = Filename.current_dir_name
                || filename = Filename.parent_dir_name ->
-      aux dh files index
+      aux dh files (index, delta)
     | filename ->
       let index, mk = Index.subElt index filename in
-      let index = addFileToIndex (Exclusion.subElt excl filename) index (Path.concat path filename) in
-      aux dh (StringSet.add filename files) (mk index)
+      let index, delta = addFileToIndex (Exclusion.subElt excl filename) (index, delta) (Path.concat path filename) in
+      aux dh (StringSet.add filename files) ((mk index), delta)
     | exception End_of_file ->
       Unix.closedir dh;
-      rmRemovedFiles path files index
+      rmRemovedFiles path files (index, delta)
   in
   match Unix.opendir (Path.toString path) with
-  | dh -> aux dh StringSet.empty index
+  | dh -> aux dh StringSet.empty (index, delta)
   | exception _ ->
     Printf.printf "Failed!\n";
-    index
+    index, delta
 
-let addOneToIndex excl index filename =
+let addOneToIndex excl (index, delta) filename =
   let path = Path.ofString filename in
   let index, mk = Index.subPath index path in
-  let index = addFileToIndex excl index path in
-  mk index
+  let index, delta = addFileToIndex excl (index, delta) path in
+  mk index, delta
 
-let printSummaryDiff node0 node1 =
-  if node1.FsNode.nbFiles < node0.FsNode.nbFiles then
-    Printf.printf "%s file(s) removed\n" (formatInt (node0.FsNode.nbFiles - node1.FsNode.nbFiles))
-  else
-    Printf.printf "%s file(s) added\n" (formatInt (node1.FsNode.nbFiles - node0.FsNode.nbFiles));
-  if node1.FsNode.size < node0.FsNode.size then
-    Printf.printf "%s byte(s) removed\n" (formatSize (Int64.sub node0.FsNode.size node1.FsNode.size))
-  else
-    Printf.printf "%s byte(s) added\n" (formatSize (Int64.sub node1.FsNode.size node0.FsNode.size))
+let printDelta delta =
+  Printf.printf "Files: %s added  %s removed  %s updated  (delta %s)\n" (formatInt delta.filesAdded) (formatInt delta.filesRemoved) (formatInt delta.filesUpdated) (formatInt (delta.filesAdded - delta.filesRemoved));
+  Printf.printf "Size: %s added  %s removed  %s updated  (delta %s)\n" (formatSize delta.sizeAdded) (formatSize delta.sizeRemoved) (formatSize delta.sizeUpdated) (formatSize (Int64.sub (Int64.add delta.sizeAdded delta.sizeUpdated) delta.sizeRemoved))
 
 let addToSavedIndex dirl excl index =
-  let node0 = FsTree.nodeOfTree index.tree in
-  let index = List.fold_left (addOneToIndex excl) index (List.map Path.makeAbsolute dirl) in
-  let node1 = FsTree.nodeOfTree index.tree in
-  printSummaryDiff node0 node1;
+  let index, delta = List.fold_left (addOneToIndex excl) (index, emptyDelta) (List.map Path.makeAbsolute dirl) in
+  printDelta delta;
   index
 
-let rmOneFromIndex index filename =
+let rmOneFromIndex (index, delta) filename =
   let path = Path.ofString filename in
   let index, mk = Index.subPath index path in
-  let index = rmAllFiles index path in
-  mk index
+  let index, delta = rmAllFiles (index, emptyDelta) path in
+  mk index, delta
 
 let rmFromSavedIndex dirl index =
-  let node0 = FsTree.nodeOfTree index.tree in
-  let index = List.fold_left rmOneFromIndex index (List.map Path.makeAbsolute dirl) in
-  let node1 = FsTree.nodeOfTree index.tree in
-  printSummaryDiff node0 node1;
+  let index, delta = List.fold_left rmOneFromIndex (index, emptyDelta) (List.map Path.makeAbsolute dirl) in
+  printDelta delta;
   index
 
 let listDup index =
@@ -568,7 +591,7 @@ let checkIndex () index =
       let index, mk = Index.subElt index name in
       mk (checkTree (Path.concat path name) index)
     in
-    Index.switchFold onLeaf onNodeElt index
+    Index.switchFold onLeaf onNodeElt index index
   in
   let checkHashes index =
     let forFile size h filename index =
@@ -618,8 +641,8 @@ let doRemoveFile cfg filename =
     if cfg.verbosity >= 0 then Printf.printf "Would remove file %s\n" filename;
     false )
 
-let rec doCollectRmAllFiles cfg (index, subHashes) ~collect ~rm path =
-  let onLeaf (sz, _, h) (index, subHashes) =
+let rec doCollectRmFiles cfg (index, delta, subHashes) ~collect ~rm path =
+  let onLeaf (sz, _, h) (index, delta, subHashes) =
     let filename = lazy (Path.toString path) in
     match getInHashes subHashes sz h with
     | otherNames ->
@@ -637,39 +660,41 @@ let rec doCollectRmAllFiles cfg (index, subHashes) ~collect ~rm path =
         let didRemove = doRemoveFile cfg (Lazy.force filename) in
         if didRemove then
           let index = rmFileFromHashes index sz h (Lazy.force filename) in
-          index, subHashes
+          let index = { index with tree = FsTree.empty } in
+          let delta = deltaRemoveFile delta sz in
+          index, delta, subHashes
         else
-          index, subHashes
+          index, delta, subHashes
       else if collect then
         let subHashes = addFileInHashes subHashes sz h (Lazy.force filename) in
-        index, subHashes
+        index, delta, subHashes
       else
-        index, subHashes
+        index, delta, subHashes
     | exception Not_found ->
       if collect then
         let subHashes = addFileInHashes subHashes sz h (Lazy.force filename) in
-        index, subHashes
+        index, delta, subHashes
       else
-        index, subHashes in
-  let onNodeElt name tree (index, subHashes) =
-    doCollectRmAllFiles cfg ({ index with tree }, subHashes) ~collect ~rm (Path.concat path name) in
-  let index, subHashes = FsTree.switchFold onLeaf onNodeElt index.tree (index, subHashes) in
-  let index = if rm then { index with tree = FsTree.empty } else index in
-  index, subHashes
+        index, delta, subHashes in
+  let onNodeElt name tree (index, delta, subHashes) =
+    doCollectRmFiles cfg ({ index with tree }, delta, subHashes) ~collect ~rm (Path.concat path name) in
+  let index, delta, subHashes = Index.switchFold onLeaf onNodeElt index (index, delta, subHashes) in
+  index, delta, subHashes
 
-let doCollectRmOne cfg (index0, subHashes) ~collect ~rm filename =
+let doCollectRmOne cfg (index0, delta, subHashes) ~collect ~rm filename =
   let path = Path.ofString filename in
   let index, mk = Index.subPath index0 path in
-  let index', subHashes = doCollectRmAllFiles cfg (index, subHashes) ~collect ~rm path in
+  let index', delta, subHashes = doCollectRmFiles cfg (index, delta, subHashes) ~collect ~rm path in
   if cfg.force then
-    mk index, subHashes
+    mk index, delta, subHashes
   else
-    index0, subHashes
+    index0, delta, subHashes
 
 let doRm (cfg, dirl) index =
-  let doOne (index, subHashes) ((collect, rm), dir) =
-    doCollectRmOne cfg (index, subHashes) ~collect ~rm (Path.makeAbsolute dir) in
-  let index, _ = List.fold_left doOne (index, Int64Map.empty) dirl in
+  let doOne (index, delta, subHashes) ((collect, rm), dir) =
+    doCollectRmOne cfg (index, delta, subHashes) ~collect ~rm (Path.makeAbsolute dir) in
+  let index, delta, _ = List.fold_left doOne (index, emptyDelta, Int64Map.empty) dirl in
+  printDelta delta;
   index
 
 let withIndexFileRO f indexFile =
