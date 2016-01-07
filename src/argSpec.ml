@@ -1,9 +1,8 @@
 
 type _ argSpec =
+  | Any : (string -> unit) -> string argSpec
   | Apply : ('a -> 'b) * 'a argSpec -> 'b argSpec
   | Commands : (string * 'a argSpec * _) list -> 'a argSpec
-  | Dir : string argSpec
-  | File : string argSpec
   | List : 'a argSpec -> 'a list argSpec
   | NonCommands : (string * _ * _) list * 'a argSpec -> 'a argSpec
   | NonEmptyList : 'a argSpec -> 'a list argSpec
@@ -12,9 +11,22 @@ type _ argSpec =
   | Then : 'a argSpec * 'b argSpec -> ('a * 'b) argSpec
   | Value : 'a -> 'a argSpec
 
+let anyDir,
+    anyFile,
+    anyFileOrDir =
+  let singleQuoteRegexp = Str.regexp_string "'" in
+  let escapeSingleQuote s = (* replace ' with '"\'"'
+                             to be used in bash single-quoted strings *)
+    Str.global_replace singleQuoteRegexp "'\"\\'\"'" s in
+  let compgen opt arg =
+    Sys.command (Printf.sprintf "bash -c -- 'compgen %s \"$*\"' - '%s'" opt (escapeSingleQuote arg)) |> ignore in
+  Any (compgen "-d"),
+  Any (compgen "-f"),
+  Any (compgen "-o plusdirs -f")
+
 (*
 
-  (missing) Any c
+  Any c
   match any token
   complete c()
   return the token
@@ -38,7 +50,7 @@ type _ argSpec =
   return v
   or just Exact s with v = ()
 
-  Dir
+  (removed) Dir
   match any token
   complete as directory
   return the token
@@ -49,7 +61,7 @@ type _ argSpec =
   complete nothing
   return exception
 
-  File
+  (removed) File
   match any token
   complete as file
   return the token

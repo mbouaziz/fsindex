@@ -748,7 +748,7 @@ module DoRmCmd = struct
     "--collectrm", NonEmptyList (Then (Value (true, true), nonCommandDir)), "collect hashes and remove files in these directories";
     "--rm", NonEmptyList (Then (Value (false, true), nonCommandDir)), "remove files in these directories";
   ]
-  and nonCommandDir = NonCommands (commands1, Dir)
+  and nonCommandDir = NonCommands (commands1, anyDir)
 
   let args = Then (Apply (foldCfg, List (Commands commands0)), Apply (List.flatten, NonEmptyList (Commands commands1)))
 end
@@ -761,14 +761,14 @@ module IndexCmd = struct
   let ro f arg = withIndexFileRO (f arg)
 
   let commands = [
-    "add", Apply (rwexcl addToSavedIndex, NonEmptyList File), "add/update files/directories to index";
-    "rm", Apply (rw rmFromSavedIndex, NonEmptyList File), "remove files/directories from index";
+    "add", Apply (rwexcl addToSavedIndex, NonEmptyList anyFileOrDir), "add/update files/directories to index";
+    "rm", Apply (rw rmFromSavedIndex, NonEmptyList anyFileOrDir), "remove files/directories from index";
     "ldup", Apply (ro (printDup noFilter printSizeLost), Nothing), "list duplicate files";
     "ddup", Apply (ro printDDup, Nothing), "list duplicate directories";
     "lsim", Apply (ro (listSim maxToShow), Nothing), "list similar directories";
     "stats", Apply (ro printStats, Nothing), "print stats";
-    "du", Apply (ro (diskUsage maxToShow), Dir), "print biggest files/directories in some directory";
-    "dut", Apply (ro (diskUsageTree maxToShowSmall), Dir), "print biggest files/directories in some directory (shown as a tree)";
+    "du", Apply (ro (diskUsage maxToShow), anyDir), "print biggest files/directories in some directory";
+    "dut", Apply (ro (diskUsageTree maxToShowSmall), anyDir), "print biggest files/directories in some directory (shown as a tree)";
     "phashes", Apply (ro printHashes, Nothing), "print all files in index";
     "pdhashes", Apply (ro printDirHashes, Nothing), "print all directories in index";
     "check", Apply (rw checkIndex, Nothing), "check index and remove partial entries";
@@ -795,7 +795,7 @@ module MainCmd = struct
 
   let default =
     let apply (index, f) = f index in
-    Apply (apply, Then (File, IndexCmd.args))
+    Apply (apply, Then (anyFile, IndexCmd.args))
 
   let args = Or (Commands commands, default)
 end

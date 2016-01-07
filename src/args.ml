@@ -6,21 +6,10 @@ type 'a t = 'a argSpec
 
 type wrapped = Wrapped : 'a t -> wrapped
 
-let esc = (* replace ' with '"\'"'
-             to be used in bash single-quoted strings *)
-  let regexp = Str.regexp_string "'" in
-  fun s -> Str.global_replace regexp "'\"\\'\"'" s
-
-let completeCommand cmd arg =
-  cmd |> List.map fst3 |> List.filter (stringStartsWith arg) |> List.iter print_endline
-let completeFile arg = Sys.command (Printf.sprintf "bash -c -- 'compgen -f \"$*\"' - '%s'" (esc arg)) |> ignore
-let completeDir arg = Sys.command (Printf.sprintf "bash -c -- 'compgen -d \"$*\"' - '%s'" (esc arg)) |> ignore
-
 let rec isEmpty : type a. a t -> bool = function
+  | Any _ -> false
   | Apply (_, t) -> isEmpty t
   | Commands _ -> false
-  | Dir -> false
-  | File -> false
   | List _ -> false
   | NonCommands (_, t) -> isEmpty t
   | NonEmptyList _ -> false
@@ -30,10 +19,9 @@ let rec isEmpty : type a. a t -> bool = function
   | Value _ -> true
 
 let rec canBeEmpty : type a. a t -> bool = function
+  | Any _ -> false
   | Apply (_, t) -> canBeEmpty t
   | Commands _ -> false
-  | Dir -> false
-  | File -> false
   | List _ -> true
   | NonCommands (_, t) -> canBeEmpty t
   | NonEmptyList _ -> false
@@ -49,14 +37,13 @@ let sanityCheck : type a. a t -> unit =
     | exception Not_found ->
       let checking = (Obj.repr t)::checking in
       match t with
+      | Any _ -> ()
       | Apply (_, t) -> aux checking t
       | Commands cmd ->
         (match List.find (fst3 @> ((=) "")) cmd with
         | exception Not_found -> () (* could check they are all different *)
         | _ -> failwith "Empty command");
         List.iter (snd3 @> aux checking) cmd
-      | Dir -> ()
-      | File -> ()
       | List t ->
         if canBeEmpty t then failwith "Element of list can be empty";
         aux checking t
@@ -75,12 +62,14 @@ let sanityCheck : type a. a t -> unit =
       | Value _ -> () in
   fun t -> aux [] t
 
+let completeCommand cmd arg =
+  cmd |> List.map fst3 |> List.filter (stringStartsWith arg) |> List.iter print_endline
+
 let rec completeT : type a. a t -> string -> unit = fun t arg ->
   match t with
+  | Any comp -> comp arg
   | Apply (_, t') -> completeT t' arg
   | Commands cmd -> completeCommand cmd arg
-  | Dir -> completeDir arg
-  | File -> completeFile arg
   | List t' -> completeT t' arg
   | NonCommands (_, t') -> completeT t' arg
   | NonEmptyList t' -> completeT t' arg
@@ -93,11 +82,10 @@ let rec completeT : type a. a t -> string -> unit = fun t arg ->
 
 let rec matchFirst : type a. a t -> string -> wrapped = fun t0 a ->
   match t0 with
+  | Any _ -> Wrapped Nothing
   | Apply (_, t') -> matchFirst t' a
   | Commands cmd ->
     Wrapped (snd3 (List.find (fst3 @> ((=) a)) cmd))
-  | Dir -> Wrapped Nothing
-  | File -> Wrapped Nothing
   | List t ->
     (match matchFirst t a with
     | Wrapped t' when isEmpty t' -> Wrapped t0
@@ -135,6 +123,10 @@ let rec doComplete : type a. a t -> string list -> unit = fun t args ->
 let compute : type a. a t -> string list -> a = fun t args ->
   let rec aux : type a. a t -> bool -> string list -> a Lazy.t * string list = fun t full args ->
     match t, args with
+    | Any _, [] -> raise (Arg.Bad "Expected argument")
+    | Any _, arg::args ->
+      if full && args <> [] then raise (Arg.Bad "Too many arguments");
+      lazy arg, args      
     | Apply (f, t'), _ ->
       let res, rem = aux t' full args in
       lazy (f (Lazy.force res)), rem
@@ -143,14 +135,6 @@ let compute : type a. a t -> string list -> a = fun t args ->
       (match List.find (fst3 @> ((=) command)) cmd with
       | _, t, _ -> aux t full args
       | exception Not_found -> raise (Arg.Bad "Unknown command"))
-    | Dir, [] -> raise (Arg.Bad "Missing directory name")
-    | File, [] -> raise (Arg.Bad "Missing file name")
-    | Dir, arg::args ->
-      if full && args <> [] then raise (Arg.Bad "Too many arguments");
-      lazy arg, args
-    | File, arg::args ->
-      if full && args <> [] then raise (Arg.Bad "Too many arguments");
-      lazy arg, args
     | List _, [] -> lazy [], []
     | List t', args ->
       let res, rem = match aux t' false args with
