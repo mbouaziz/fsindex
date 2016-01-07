@@ -6,10 +6,15 @@ type 'a t = 'a argSpec
 
 type wrapped = Wrapped : 'a t -> wrapped
 
+let esc = (* replace ' with '"\'"'
+             to be used in bash single-quoted strings *)
+  let regexp = Str.regexp_string "'" in
+  fun s -> Str.global_replace regexp "'\"\\'\"'" s
+
 let completeCommand cmd arg =
   cmd |> List.map fst3 |> List.filter (stringStartsWith arg) |> List.iter print_endline
-let completeFile arg = Sys.command (Printf.sprintf "bash -c \"compgen -f -- '%s'\"" arg) |> ignore
-let completeDir arg = Sys.command (Printf.sprintf "bash -c \"compgen -d -- '%s'\"" arg) |> ignore
+let completeFile arg = Sys.command (Printf.sprintf "bash -c -- 'compgen -f \"$*\"' - '%s'" (esc arg)) |> ignore
+let completeDir arg = Sys.command (Printf.sprintf "bash -c -- 'compgen -d \"$*\"' - '%s'" (esc arg)) |> ignore
 
 let rec isEmpty : type a. a t -> bool = function
   | Apply (_, t) -> isEmpty t

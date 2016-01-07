@@ -4,5 +4,5 @@ obuild-ver: 1
 executable fsindex
  main-is: main.ml
  src-dir: src
- build-deps: unix
+ build-deps: str, unix
 
