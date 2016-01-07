@@ -786,7 +786,7 @@ module MainCmd = struct
   let bashCompletion () =
     Printf.printf "# Bash completion script for %s\n" myName;
     Printf.printf "# Put this script in /etc/bash_completion.d/\n\n";
-    Printf.printf "complete -C %s %s\n" myName myName
+    Printf.printf "complete -o filenames -C %s %s\n" myName myName
 
   let commands = [
     "--help", Apply (help, Nothing), "print this help";
