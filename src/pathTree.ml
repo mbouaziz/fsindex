@@ -6,6 +6,7 @@ module type NodeAndLeaf = sig
   type node
   type leaf
   val emptyNode: node
+  val isEmptyNode: node -> bool
   val nodeOfLeaf: leaf -> node
   val replace: (* from *) node -> (* to *) node -> (* in *) node -> node
 
@@ -20,24 +21,30 @@ module Make(NAL : NodeAndLeaf) = struct
   let nodeEmpty = NAL.emptyNode, StringMap.empty
   let empty = Node nodeEmpty
 
+  let isEmpty = function
+  | Leaf _ -> false
+  | Node (n, m) -> NAL.isEmptyNode n && StringMap.is_empty m
+
   let nodeOfTree = function
   | Leaf l -> NAL.nodeOfLeaf l
   | Node (n, _) -> n
 
-  let nodeReplace pathElt ot t n m =
-    let ot' = nodeOfTree ot in
-    let t' = nodeOfTree t in
-    let n' = if ot' == t' then n
-        else NAL.replace (nodeOfTree ot) (nodeOfTree t) n in
-    n', StringMap.add pathElt t m
+  let nodeReplace pathElt ot t (n, m) =
+    let n = NAL.replace (nodeOfTree ot) (nodeOfTree t) n in
+    let m = if isEmpty t then StringMap.remove pathElt m
+      else StringMap.add pathElt t m in
+    n, m
 
   let getSubElt (tree, mk) pathElt =
-    let n, m = match tree with
+    let (_, m) as nm = match tree with
     | Leaf _ -> nodeEmpty
     | Node nm -> nm
     in
     let subTree = try StringMap.find pathElt m with Not_found -> empty in
-    subTree, fun t -> mk (Node (nodeReplace pathElt subTree t n m))
+    let mk t =
+      if t = subTree then mk tree
+      else mk (Node (nodeReplace pathElt subTree t nm)) in
+    subTree, mk
 
   let subElt tree pathElt = getSubElt (tree, fun x -> x) pathElt
 

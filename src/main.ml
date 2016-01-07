@@ -15,6 +15,8 @@ module FsNode = struct
 
   let emptyNode = { nbFiles = 0; size = 0L }
 
+  let isEmptyNode { nbFiles; size } = nbFiles = 0 && size = 0L
+
   let nodeOfLeaf (size, _, _) = { nbFiles = 1; size = size }
 
   let replace fromNode toNode inNode =
@@ -30,6 +32,8 @@ module DirHashNode = struct
   type node = leaf * leaf list
 
   let emptyNode = (0L, H.empty), []
+
+  let isEmptyNode ((size, _h), l) = size = 0L && l = []
 
   let nodeOfLeaf x = x, [x]
 
@@ -82,6 +86,9 @@ module Index = struct
   let switchFold onLeaf onNodeElt index acc =
     FsTree.switchFold onLeaf onNodeElt index.tree acc
 
+  let equal index0 index1 =
+    index0.hashes == index1.hashes && index0.tree == index1.tree
+
 end
 
 module Exclusion = struct
@@ -90,7 +97,8 @@ module Exclusion = struct
     type node = unit
     type leaf = unit
     let emptyNode = ()
-    let nodeOfLeaf unit = unit
+    let isEmptyNode () = true
+    let nodeOfLeaf () = ()
     let replace _from _to _in = assert false
   end
 
@@ -244,6 +252,7 @@ let addRegFileToIndex (index, delta) path stats =
     Printf.printf "unchanged\n";
     false, None, delta
   | exception Not_found ->
+    (* TODO: dir replaced by a file *)
     Printf.printf "new\n";
     true, None, deltaAddFile delta size in
   let index = match toRm with
@@ -704,16 +713,14 @@ let withIndexFileRO f indexFile =
 let withIndexFileRW f indexFile =
   let index0 = Index.fromFileOrEmpty indexFile in
   let index = f index0 in
-  if index == index0 then
+  if Index.equal index index0 then
     Printf.printf "Index did not change\n"
   else
     Index.toFile indexFile index
 
 let withIndexAndExclFilesRW f indexFile =
-  let index = Index.fromFileOrEmpty indexFile in
   let excl = Exclusion.read (Exclusion.filename indexFile) in
-  let index = f excl index in
-  Index.toFile indexFile index
+  withIndexFileRW (f excl) indexFile
 
 
 let maxToShow = 10000
