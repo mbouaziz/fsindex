@@ -736,11 +736,12 @@ module DoRmCmd = struct
     "--quiet", Value decrVerb, "decrease verbosity";
     "--force", Value setForce, "really remove files";
   ]
-  let commands1 = [
-    "--collect", NonEmptyList (Then (Value (true, false), Dir)), "collect hashes in these directories";
-    "--collectrm", NonEmptyList (Then (Value (true, true), Dir)), "collect hashes and remove files in these directories";
-    "--rm", NonEmptyList (Then (Value (false, true), Dir)), "remove files in these directories";
+  let rec commands1 = [
+    "--collect", NonEmptyList (Then (Value (true, false), nonCommandDir)), "collect hashes in these directories";
+    "--collectrm", NonEmptyList (Then (Value (true, true), nonCommandDir)), "collect hashes and remove files in these directories";
+    "--rm", NonEmptyList (Then (Value (false, true), nonCommandDir)), "remove files in these directories";
   ]
+  and nonCommandDir = NonCommands (commands1, Dir)
 
   let args = Then (Apply (foldCfg, List (Commands commands0)), Apply (List.flatten, NonEmptyList (Commands commands1)))
 end

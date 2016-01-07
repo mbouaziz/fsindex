@@ -17,6 +17,7 @@ let rec isEmpty : type a. a t -> bool = function
   | Dir -> false
   | File -> false
   | List _ -> false
+  | NonCommands (_, t) -> isEmpty t
   | NonEmptyList _ -> false
   | Nothing -> true
   | Or (t1, t2) -> isEmpty t1 && isEmpty t2
@@ -29,36 +30,45 @@ let rec canBeEmpty : type a. a t -> bool = function
   | Dir -> false
   | File -> false
   | List _ -> true
+  | NonCommands (_, t) -> canBeEmpty t
   | NonEmptyList _ -> false
   | Nothing -> true
   | Or (t1, t2) -> canBeEmpty t1 || canBeEmpty t2
   | Then (t1, t2) -> canBeEmpty t1 && canBeEmpty t2
   | Value _ -> true
 
-let rec sanityCheck : type a. a t -> unit = function
-  | Apply (_, t) -> sanityCheck t
-  | Commands cmd ->
-    (match List.find (fst3 @> ((=) "")) cmd with
-    | exception Not_found -> () (* could check they are all different *)
-    | _ -> failwith "Empty command");
-    List.iter (snd3 @> sanityCheck) cmd
-  | Dir -> ()
-  | File -> ()
-  | List t ->
-    if canBeEmpty t then failwith "Element of list can be empty";
-    sanityCheck t
-  | NonEmptyList t ->
-    if canBeEmpty t then failwith "Element of non-empty list can be empty";
-    sanityCheck t
-  | Nothing -> ()
-  | Or (t1, t2) ->
-    if canBeEmpty t1 then failwith "First element of Or can be empty";
-    sanityCheck t1;
-    sanityCheck t2
-  | Then (t1, t2) ->
-    sanityCheck t1;
-    sanityCheck t2
-  | Value _ -> ()
+let sanityCheck : type a. a t -> unit =
+  let rec aux : type a. Obj.t list -> a t -> unit = fun checking t ->
+    match List.find (function t' -> t' == Obj.repr t) checking with
+    | _ -> () (* avoid infinite loop *)
+    | exception Not_found ->
+      let checking = (Obj.repr t)::checking in
+      match t with
+      | Apply (_, t) -> aux checking t
+      | Commands cmd ->
+        (match List.find (fst3 @> ((=) "")) cmd with
+        | exception Not_found -> () (* could check they are all different *)
+        | _ -> failwith "Empty command");
+        List.iter (snd3 @> aux checking) cmd
+      | Dir -> ()
+      | File -> ()
+      | List t ->
+        if canBeEmpty t then failwith "Element of list can be empty";
+        aux checking t
+      | NonCommands (_, t) -> aux checking t
+      | NonEmptyList t ->
+        if canBeEmpty t then failwith "Element of non-empty list can be empty";
+        aux checking t
+      | Nothing -> ()
+      | Or (t1, t2) ->
+        if canBeEmpty t1 then failwith "First element of Or can be empty";
+        aux checking t1;
+        aux checking t2
+      | Then (t1, t2) ->
+        aux checking t1;
+        aux checking t2
+      | Value _ -> () in
+  fun t -> aux [] t
 
 let rec completeT : type a. a t -> string -> unit = fun t arg ->
   match t with
@@ -67,6 +77,7 @@ let rec completeT : type a. a t -> string -> unit = fun t arg ->
   | Dir -> completeDir arg
   | File -> completeFile arg
   | List t' -> completeT t' arg
+  | NonCommands (_, t') -> completeT t' arg
   | NonEmptyList t' -> completeT t' arg
   | Nothing -> ()
   | Or (t1, t2) -> completeT t1 arg; completeT t2 arg
@@ -86,6 +97,10 @@ let rec matchFirst : type a. a t -> string -> wrapped = fun t0 a ->
     (match matchFirst t a with
     | Wrapped t' when isEmpty t' -> Wrapped t0
     | Wrapped t' -> Wrapped (Then (t', t0)))
+  | NonCommands (cmd, t) ->
+    (match List.find (fst3 @> ((=) a)) cmd with
+    | _ -> raise Not_found
+    | exception Not_found -> matchFirst t a)
   | NonEmptyList t ->
     (match matchFirst t a with
     | Wrapped t' when isEmpty t' -> Wrapped (List t)
@@ -140,6 +155,12 @@ let compute : type a. a t -> string list -> a = fun t args ->
         lazy ((Lazy.force res)::(Lazy.force res')), rem in
       if full && rem <> [] then raise (Arg.Bad "Too many arguments");
       res, rem
+    | NonCommands (_, t'), [] ->
+      aux t' full []
+    | NonCommands (cmd, t'), nonCommand::_ ->
+      (match List.find (fst3 @> ((=) nonCommand)) cmd with
+      | _ -> raise (Arg.Bad "Unexpected command")
+      | exception Not_found -> aux t' full args) 
     | NonEmptyList _, [] -> raise (Arg.Bad "Missing argument")
     | NonEmptyList t', args ->
       let first, rem = aux t' false args in

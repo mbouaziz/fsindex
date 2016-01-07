@@ -5,6 +5,7 @@ type _ argSpec =
   | Dir : string argSpec
   | File : string argSpec
   | List : 'a argSpec -> 'a list argSpec
+  | NonCommands : (string * _ * _) list * 'a argSpec -> 'a argSpec
   | NonEmptyList : 'a argSpec -> 'a list argSpec
   | Nothing : unit argSpec
   | Or : 'a argSpec * 'a argSpec -> 'a argSpec
@@ -61,6 +62,12 @@ type _ argSpec =
   return the list of [| t |]
   is like Or(Value [], NonEmptyList t)
   or like Or(Value [], Apply(List.cons, Then(t, List t)))
+
+  NonCommands ([ s1, _, _; s2, _, _; ...], t)
+  match t if does not start with s1, or s2, ...
+  complete as t
+  return [| t |]
+  LR(1) version of a Not
 
   NonEmptyList t
   (t must be non empty)
