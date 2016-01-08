@@ -693,7 +693,7 @@ let rec doCollectRmFiles cfg (index, delta, subHashes) ~collect ~rm path =
 let doCollectRmOne cfg (index0, delta, subHashes) ~collect ~rm filename =
   let path = Path.ofString filename in
   let index, mk = Index.subPath index0 path in
-  let index', delta, subHashes = doCollectRmFiles cfg (index, delta, subHashes) ~collect ~rm path in
+  let index, delta, subHashes = doCollectRmFiles cfg (index, delta, subHashes) ~collect ~rm path in
   if cfg.force then
     mk index, delta, subHashes
   else
