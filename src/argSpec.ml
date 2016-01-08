@@ -19,7 +19,7 @@ let anyDir,
                              to be used in bash single-quoted strings *)
     Str.global_replace singleQuoteRegexp "'\"\\'\"'" s in
   let compgen opt arg =
-    Sys.command (Printf.sprintf "bash -c -- 'compgen %s \"$*\"' - '%s'" opt (escapeSingleQuote arg)) |> ignore in
+    Sys.command (Printf.sprintf "bash -c -- 'compgen %s -- \"$*\"' - '%s'" opt (escapeSingleQuote arg)) |> ignore in
   Any (compgen "-d"),
   Any (compgen "-f"),
   Any (compgen "-o plusdirs -f")
